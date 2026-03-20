@@ -1,0 +1,122 @@
+.zotero-doi-wrapper {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    margin: 0 2px;
+    font-size: 0.9em;
+}
+
+.zotero-marker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: normal;
+    margin-left: 4px;
+    cursor: default;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    transition: all 0.2s ease;
+}
+
+.zotero-marker.exists {
+    background-color: #4CAF50;
+    color: white;
+    border: 1px solid #43A047;
+}
+
+.zotero-marker.new {
+    background-color: #FF5252;
+    color: white;
+    border: 1px solid #D32F2F;
+}
+
+.zotero-marker.offline {
+    background-color: #E0E0E0;
+    color: #757575;
+    border: 1px solid #BDBDBD;
+}
+
+.zotero-marker:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+}
+
+.zotero-open-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    font-size: 12px;
+    border-radius: 50%;
+    background-color: #E3F2FD;
+    color: #1976D2;
+    transition: all 0.2s ease;
+}
+
+.zotero-open-link:hover {
+    background-color: #1976D2;
+    color: white;
+    transform: scale(1.1);
+}
+
+button.zotero-add-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    padding: 0;
+    font-size: 12px;
+    border: none;
+    border-radius: 50%;
+    background-color: #E3F2FD;
+    color: #1976D2;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+button.zotero-add-button:hover {
+    background-color: #1976D2;
+    color: white;
+    transform: scale(1.1);
+}
+
+/* 深色模式适配 */
+@media (prefers-color-scheme: dark) {
+    .zotero-marker.exists {
+        background-color: #43A047;
+        border-color: #388E3C;
+    }
+
+    .zotero-marker.new {
+        background-color: #D32F2F;
+        border-color: #C62828;
+    }
+
+    .zotero-open-link {
+        background-color: #1E1E1E;
+        color: #64B5F6;
+    }
+
+    .zotero-open-link:hover {
+        background-color: #64B5F6;
+        color: #1E1E1E;
+    }
+
+    button.zotero-add-button {
+        background-color: #1E1E1E;
+        color: #64B5F6;
+    }
+
+    button.zotero-add-button:hover {
+        background-color: #64B5F6;
+        color: #1E1E1E;
+    }
+}

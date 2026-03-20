@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 350px;
+      padding: 20px;
+      font-size: 14px;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #333;
+      line-height: 1.5;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section {
+      padding: 15px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e9ecef;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-icon {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .status-icon.online {
+      background: #4CAF50;
+      box-shadow: 0 0 8px rgba(76, 175, 80, 0.5);
+    }
+
+    .status-icon.offline {
+      background: #FF5252;
+      box-shadow: 0 0 8px rgba(255, 82, 82, 0.5);
+    }
+
+    h2 {
+      margin: 0 0 10px 0;
+      font-size: 16px;
+      color: #1976D2;
+      border-bottom: 2px solid #E3F2FD;
+      padding-bottom: 5px;
+    }
+
+    .features {
+      list-style-type: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .features li {
+      margin-bottom: 8px;
+      padding-left: 20px;
+      position: relative;
+    }
+
+    .features li::before {
+      content: "•";
+      position: absolute;
+      left: 5px;
+      color: #1976D2;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 12px;
+      align-items: center;
+    }
+
+    .legend-icon {
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 12px;
+    }
+
+    .footer {
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #eee;
+    }
+
+    /* 深色模式适配 */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #1a1a1a;
+        color: #e0e0e0;
+      }
+
+      .section {
+        background: #2d2d2d;
+        border-color: #404040;
+      }
+
+      h2 {
+        color: #64B5F6;
+        border-bottom-color: #1E1E1E;
+      }
+
+      .footer {
+        color: #999;
+        border-top-color: #404040;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="section">
+      <div class="status">
+        <div id="serviceStatus" class="status-icon offline"></div>
+        <span id="statusText">检查服务状态...</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>功能说明</h2>
+      <ul class="features">
+        <li>自动识别网页中的 DOI/ISBN/PMID</li>
+        <li>实时检查网页中的标识符在 Zotero 中是否存在</li>
+        <li>如不存在则支持一键导入新文献到 Zotero 库</li>
+        <li>如存在则支持快速定位已有文献位置</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <h2>图标说明</h2>
+      <div class="legend">
+        <span class="legend-icon" style="background: #4CAF50; color: white;">✓</span>
+        <span>已存在于 Zotero 库中</span>
+        
+        <span class="legend-icon" style="background: #FF5252; color: white;">✕</span>
+        <span>未在 Zotero 库中找到</span>
+        
+        <span class="legend-icon" style="background: #E3F2FD; color: #1976D2;">➕</span>
+        <span>点击添加到 Zotero</span>
+        
+        <span class="legend-icon" style="background: #E3F2FD; color: #1976D2;">🔍</span>
+        <span>在 Zotero 中打开</span>
+        
+        <span class="legend-icon" style="background: #E0E0E0; color: #757575;">!</span>
+        <span>Flask 服务未运行</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>使用要求</h2>
+      <ul class="features">
+        <li>Zotero 需要处于运行状态</li>
+        <li>本地 Flask 服务必须启动</li>
+      </ul>
+    </div>
+
+    <div class="footer">
+      <p>Zotero Picker v1.0.0</p>
+      <div style="text-align:center; font-size:12px; color:gray; margin-top:20px;">
+        开发者：肖青 · 四川大学华西医院<br>
+        软件著作权登记号：2025SR0813220<br>
+        版权所有 © 2025
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html> 

@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Zotero Picker",
+  "version": "1.0.0",
+  "description": "Zotero Picker 是一款用于识别网页 DOI/ISBN/PMID 并与本地 Zotero 库交互的插件，可高亮标记已有文献、导入新文献、快捷定位文献位置。软件著作权登记号：2025SR0813220。版权所有：四川大学华西医院，主要开发者：肖青。",
+  "author": "四川大学华西医院",
+  "developer": {
+    "name": "肖青 Qing Xiao"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:5000/*",
+    "http://localhost:23119/*",
+    "http://127.0.0.1:23119/*",
+    "*://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "icons": {
+    "32": "icons/icon32.png",
+    "64": "icons/icon64.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "32": "icons/icon32.png",
+      "64": "icons/icon64.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Zotero Picker",
+    "default_popup": "popup.html"
+  },
+  "minimum_chrome_version": "88",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:* http://localhost:*;"
+  }
+}
