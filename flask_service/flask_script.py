@@ -68,7 +68,7 @@ def load_config():
             # 创建默认配置文件
             default_config = {
                 'db_path': default_paths.get(sys.platform, default_paths['windows']),
-                'description': '配置说明：db_path 为 Zotero 数据库文件路径，可手动修改此文件',
+                'description': '配置说明：db_path 为 Zotero 数据库文件路径，可手动修改此路径',
                 'version': '1.0'
             }
             save_config(default_config)
@@ -125,7 +125,7 @@ def create_high_dpi_dialog():
     return root, scale_factor, base_font_size, title_font_size
 
 def select_database_path(use_default=False):
-    """选择数据库路径 - 高DPI优化版本"""
+    """选择数据库路径"""
     try:
         logger.info("开始选择数据库路径...")
         root, scale_factor, base_font_size, title_font_size = create_high_dpi_dialog()
@@ -139,10 +139,8 @@ def select_database_path(use_default=False):
             logger.info("配置文件中无有效路径，直接打开文件选择器")
             root.destroy()
             
-            # 创建简单的文件选择对话框
             file_root = tk.Tk()
             file_root.withdraw()
-            
             initial_dir = str(Path(current_path).parent) if current_path else str(Path.home())
             file_path = filedialog.askopenfilename(
                 title='选择 Zotero 数据库文件 (zotero.sqlite)',
@@ -150,11 +148,9 @@ def select_database_path(use_default=False):
                 initialdir=initial_dir,
                 filetypes=[('SQLite数据库', '*.sqlite'), ('所有文件', '*.*')]
             )
-            
             file_root.destroy()
             
             if file_path and os.path.exists(file_path):
-                # 自动保存到配置文件
                 config['db_path'] = file_path
                 save_config(config)
                 logger.info(f"用户选择新路径并保存: {file_path}")
@@ -187,11 +183,9 @@ def select_database_path(use_default=False):
         style = ttk.Style()
         style.theme_use('clam')
         
-        # 创建主框架
         main_frame = ttk.Frame(dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # 标题
         title_label = ttk.Label(
             main_frame, 
             text="Zotero 数据库配置", 
@@ -199,7 +193,6 @@ def select_database_path(use_default=False):
         )
         title_label.pack(pady=(0, 15))
         
-        # 说明文本
         exe_dir = get_exe_directory()
         config_file_path = os.path.join(exe_dir, 'zotero_config.json')
         
@@ -214,28 +207,21 @@ def select_database_path(use_default=False):
             f"💡 提示：您也可以直接编辑配置文件：\n{config_file_path}"
         )
         
-        # 使用Text控件以获得更好的文本显示效果
         text_frame = ttk.Frame(main_frame)
         text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
         
         message_text = tk.Text(
-            text_frame,
-            height=13,
-            wrap=tk.WORD,
+            text_frame, height=13, wrap=tk.WORD,
             font=('Microsoft YaHei UI', base_font_size),
-            relief=tk.FLAT,
-            bg=dialog.cget('bg'),
-            cursor='arrow',
-            state=tk.DISABLED
+            relief=tk.FLAT, bg=dialog.cget('bg'),
+            cursor='arrow', state=tk.DISABLED
         )
         message_text.pack(fill=tk.BOTH, expand=True)
         
-        # 插入文本内容
         message_text.config(state=tk.NORMAL)
         message_text.insert(tk.END, message)
         message_text.config(state=tk.DISABLED)
         
-        # 倒计时标签
         countdown_frame = ttk.Frame(main_frame)
         countdown_frame.pack(pady=10)
         
@@ -247,10 +233,25 @@ def select_database_path(use_default=False):
         )
         countdown_label.pack()
         
-        result = {'path': current_path}  # 默认使用配置文件中的路径
+        # ==================== 核心修复逻辑开始 ====================
+        result = {'path': current_path}
+        state = {'timer_id': None}  # 用一个字典保存定时器句柄，方便随时取消
         
-        # 按钮函数
+        def safe_quit():
+            """安全退出机制：取消所有残余定时器并结束主循环"""
+            if state['timer_id']:
+                dialog.after_cancel(state['timer_id'])
+                state['timer_id'] = None
+            root.quit()  # 安全结束 mainloop
+        
         def choose_new_path():
+            # 用户点击选择时，必须先挂起倒计时！
+            if state['timer_id']:
+                dialog.after_cancel(state['timer_id'])
+                state['timer_id'] = None
+                if countdown_label.winfo_exists():
+                    countdown_label.config(text="倒计时已暂停...")
+            
             initial_dir = str(Path(current_path).parent) if current_path else str(Path.home())
             file_path = filedialog.askopenfilename(
                 title='选择 Zotero 数据库文件',
@@ -260,18 +261,17 @@ def select_database_path(use_default=False):
             )
             if file_path:
                 result['path'] = file_path
-                # 自动保存到配置文件
                 config['db_path'] = file_path
                 save_config(config)
                 logger.info(f"用户选择新路径并保存: {file_path}")
-            dialog.destroy()
+            
+            safe_quit()
         
         def use_config_path():
             result['path'] = current_path
-            dialog.destroy()
-        
+            safe_quit()
+            
         def open_config_folder():
-            """打开配置文件所在文件夹"""
             try:
                 if sys.platform == "win32":
                     os.startfile(exe_dir)
@@ -284,56 +284,44 @@ def select_database_path(use_default=False):
         
         def update_countdown(count):
             if count > 0:
-                countdown_label.config(text=f"{count}秒后自动使用配置路径")
-                dialog.after(1000, update_countdown, count - 1)
+                # 必须检查组件是否存活，防止抛出隐式异常
+                if countdown_label.winfo_exists():
+                    countdown_label.config(text=f"{count}秒后自动使用配置路径")
+                    # 保存定时器句柄到 state 中
+                    state['timer_id'] = dialog.after(1000, update_countdown, count - 1)
             else:
                 use_config_path()
-        
-        # 创建按钮框架
+        # ==================== 核心修复逻辑结束 ====================
+
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(pady=15)
         
-        # 按钮样式
         button_width = 15
+        ttk.Button(button_frame, text="选择新路径", command=choose_new_path, width=button_width).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="使用配置路径", command=use_config_path, width=button_width).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="打开配置文件夹", command=open_config_folder, width=button_width).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(
-            button_frame, 
-            text="选择新路径", 
-            command=choose_new_path,
-            width=button_width
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            button_frame, 
-            text="使用配置路径", 
-            command=use_config_path,
-            width=button_width
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            button_frame, 
-            text="打开配置文件夹", 
-            command=open_config_folder,
-            width=button_width
-        ).pack(side=tk.LEFT, padx=5)
-        
-        # 版权信息
         copyright_frame = ttk.Frame(main_frame)
         copyright_frame.pack(side=tk.BOTTOM, pady=(15, 0))
-        
-        copyright_label = ttk.Label(
+        ttk.Label(
             copyright_frame,
             text="© 2025 四川大学华西医院 · 作者：肖青 · 登记号：2025SR0813220",
             font=('Microsoft YaHei UI', int(8 * scale_factor)),
             foreground='gray'
-        )
-        copyright_label.pack()
+        ).pack()
         
-        # 开始倒计时 - 5秒倒计时
+        # 绑定右上角X按钮的关闭事件
+        dialog.protocol("WM_DELETE_WINDOW", use_config_path)
+        
+        # 启动倒计时
         update_countdown(5)
         
-        dialog.protocol("WM_DELETE_WINDOW", use_config_path)
-        dialog.wait_window()
+        # 替代原本脆弱的 dialog.wait_window()，使用稳如磐石的 mainloop
+        root.mainloop()
+        
+        # 当 root.quit() 被调用后，代码才会执行到这里，此时进行彻底的清理工作
+        dialog.destroy()
+        root.update()  # 强行冲刷掉操作系统队列中可能残留的所有重绘/定时事件
         root.destroy()
         
         logger.info(f"最终选择的路径: {result['path']}")
