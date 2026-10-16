@@ -1,5 +1,0 @@
-{
-  "db_path": "D:/02_Transfer/Documents/Zotero/zotero.sqlite",
-  "description": "配置说明：db_path 为 Zotero 数据库文件路径，可手动修改此文件",
-  "version": "1.0"
-}
