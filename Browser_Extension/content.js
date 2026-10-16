@@ -8,7 +8,10 @@ class ZoteroPicker {
     this.serviceAvailable = false;
     this.debounceDelay = 100;
     this.checkCache = new Map();
-    this.cacheExpiration = 5 * 60 * 1000;
+    // 【2026-10 下调】原为 5 分钟，过长导致：用户在 Zotero 里删除文献后，
+    // 网页仍显示旧的"已存在"标记（正是用户报告的现象）。改为 30 秒——
+    // 足够消除同一页面的重复请求，又能让库中改动较快反映到页面。
+    this.cacheExpiration = 30 * 1000;
     
     // 样式配置
     this.styles = {
@@ -18,16 +21,66 @@ class ZoteroPicker {
         offline: { text: '!', color: '#999', title: 'Zotero service unavailable' }
       }
     };
-    
+
+    // 【2026-10 新增】强制刷新：清空查重缓存并重扫页面。
+    // 触发方式：在页面上按 Alt+Shift+R，或从扩展入口调用。
+    // 用途：用户刚在 Zotero 里增删条目后，无需等待缓存过期即可立即刷新状态。
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && e.shiftKey && (e.code === 'KeyR' || e.key === 'R' || e.key === 'r')) {
+        e.preventDefault();
+        this.forceRefresh();
+      }
+    });
+
     console.log('ZoteroPicker初始化 - 仅支持 DOI/ISBN/PMID');
+  }
+
+  /**
+   * 强制刷新所有标识符状态（忽略缓存）。
+   * 先清空 checkCache 让下次查询走网络，再让已渲染的标记重新查一次。
+   */
+  async forceRefresh() {
+    this.checkCache.clear();
+    console.log('ZoteroPicker: 已清空查重缓存，强制重新查询');
+
+    const markers = document.querySelectorAll('.zotero-picker-wrapper');
+    let n = 0;
+    for (const wrapper of markers) {
+      const dataset = wrapper.dataset;
+      if (!dataset || !dataset.zpType || !dataset.zpIdentifier) continue;
+      try {
+        const fresh = await this.checkZotero(dataset.zpType, dataset.zpIdentifier);
+        const marker = wrapper.querySelector('.zotero-marker');
+        if (marker) {
+          this.updateMarkerStyle(marker, fresh);
+          n++;
+        }
+      } catch (err) {
+        console.warn('强制刷新失败:', err);
+      }
+    }
+    console.log(`ZoteroPicker: 已刷新 ${n} 个标识符`);
   }
 
   initializePatterns() {
     return {
-      // DOI检测模式 
+      // DOI检测模式
+      // 【2026-10 修正】原正则的尾部终止符不含逗号/右括号/右花括号，
+      // 导致 "10.1016/xxx," 这类文本抓出的 DOI 带尾部标点（查重必然失败）。
+      // 现改为：右侧用后顾断言要求结尾是真正的 DOI 结束位置（空白/结束/引号/常见标点），
+      // 尾部标点再由 normalizeDOI() 统一清洗。
+      //
+      // 字符类说明：
+      //  - 前导字符保留 '/'：否则 https://doi.org/10.xxxx/yyy 这类 URL 形式
+      //    （文献页最常见形态）会完全漏检；保留 '"' 与 "'" 以覆盖引号包裹的写法。
+      //  - 右侧排除集保留 ()[] ，但**保留 {}**：部分 DOI 含花括号（如 SICI 编码），
+      //    排除 {} 会把 DOI 从右花括号处截断。
+      //  - 右侧排除集不含 < >：SICI 型 DOI 含 <...> 片段
+      //    (10.1002/(SICI)1097-0258(19980815)17:15<1661::AID-SIM968>3.0.CO;2-2)，
+      //    误排除会导致漏检。
       doi: [
         {
-          regex: /(\s|\>|:|^|;|\/|,)(10\.\d\d\d+\/.+?)(\)\s|\s|\.\s|&nbsp;|\.$|\"|$)/g,
+          regex: /(\s|\>|:|^|;|,|\/|\(|\[|"|')(10\.\d{4,9}\/[^\s"'\[\]()]+)(\)|\]|\s|\.\s|&nbsp;|[.,;:!?'"]|$)/g,
           captureGroup: 2
         }
       ],
@@ -122,7 +175,9 @@ class ZoteroPicker {
               }
               break;
             case 'doi':
-              isValid = identifier && identifier.indexOf('10.') !== -1;
+              // 【2026-10】原判断为 identifier.indexOf('10.') !== -1，过于宽松；
+              // 改为严格形态校验，避免抓到 URL 路径片段等误匹配
+              isValid = this.isValidDOI(identifier);
               break;
             default:
               isValid = true;
@@ -190,14 +245,37 @@ class ZoteroPicker {
         return isbnMatch;
       }
 
-      // DOI检测
-      const doiReg = /(\s|\>|:|^|;|\/|,)(10\.\d\d\d+\/.+?)(\)\s|\s|\.\s|&nbsp;|\.$|\"|$)/g;
+      // DOI检测（必须与 initializePatterns 中的定义保持一致）
+      const doiReg = /(\s|\>|:|^|;|,|\/|\(|\[|"|')(10\.\d{4,9}\/[^\s"'\[\]()]+)(\)|\]|\s|\.\s|&nbsp;|[.,;:!?'"]|$)/g;
       doiReg.lastIndex = startIndex;
       let match = doiReg.exec(text);
       if (match != null) {
-        match.identifierType = 'doi';
-        match.identifier = match[2];
-        return match;
+        const cleaned = this.normalizeDOI(match[2]);
+        // 【2026-10】若抓到的是被括号截断的片段（如 "10.1002/(sici"，
+        // 说明这实际是 SICI 型 DOI，应让位给下面的兜底正则处理，
+        // 否则会以残缺标识符去查重，必然查不到并导致重复导入。
+        if (!/\/[^/]*\($/.test(cleaned) && this.isValidDOI(cleaned)) {
+          match.identifierType = 'doi';
+          match.identifier = cleaned;
+          return match;
+        }
+      }
+
+      // 【2026-10 补充】SICI 型 DOI 内含成对括号（如 Wiley 的
+      // 10.1002/(SICI)1097-0258(19980815)17:15<1661::AID-SIM968>3.0.CO;2-2），
+      // 会被主正则的括号排除集截断而漏检，因此用宽松规则单独兜底。
+      // 注意：这里用贪婪的 \S+ 而非 \S+? —— 惰性会在 SICI 的第一个 ')' 处截断；
+      // 贪婪匹配由后视字符集（空白/引号/句点等真正的结束位置）来确定边界。
+      const siciReg = /(\s|>|:|^|;|,|\/|\(|\[|"|')(10\.\d{4,9}\/\S+)(\s|["').,;:!]|$)/g;
+      siciReg.lastIndex = startIndex;
+      const siciMatch = siciReg.exec(text);
+      if (siciMatch != null) {
+        const cleaned = this.normalizeDOI(siciMatch[2]);
+        if (this.isValidDOI(cleaned)) {
+          siciMatch.identifierType = 'doi';
+          siciMatch.identifier = cleaned;
+          return siciMatch;
+        }
       }
       
       // PMID检测
@@ -324,7 +402,10 @@ class ZoteroPicker {
         
         if (identifierType === 'doi') {
           title = 'Add to Zotero by DOI';
-          match = identifierMatch[2]; // DOI的占位符长度
+          // 【2026-10 修正】插入位置必须用"页面上实际占用的字符数"来算，
+          // 即正则原始匹配串 match[2]（含尾标点），而不是清洗后的 identifier
+          // （已剥离尾标点，长度更短）。若用清洗值计算，图标会插到标识符中间。
+          match = identifierMatch[2] || identifierMatch[0];
         } else if (identifierType === 'pmid') {
           title = 'Add to Zotero by PMID';
           match = identifierMatch[0]; // 使用整个正则匹配串(如"PMID: 1234567")来计算插入位置
@@ -415,6 +496,64 @@ class ZoteroPicker {
     }
   }
 
+  /**
+   * 阻断事件的默认行为与冒泡。
+   *
+   * 【2026-10 修复·"点击 add 打开新网页"的根因】
+   * 标记是被 insertData() 插进页面原有文本节点的，因此它常常落在宿主页面的
+   * <a href="..."> 与 <form> 内部。点击我们插入的 ➕ / ✕ 时：
+   *   ① <button> 未显式设置 type，HTML 默认 type=submit
+   *      → 若祖先有 <form>，点击会**提交表单**，浏览器跳转到新页面；
+   *   ② 事件继续冒泡到祖先 <a>
+   *      → 触发链接导航，同样打开新网页。
+   * 表现为"点一下 ➕ 就跳到一个新页面"。这里统一拦掉，
+   * 只保留我们自己注册的 handler。
+   */
+  suppressEvent(e) {
+    if (!e) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  /**
+   * 判断事件是否由我们自己的"跳转链接"(🔍) 触发。
+   *
+   * 【2026-10 回归修复·务必保留】
+   * 上一版在 wrapper 上用捕获阶段统一 suppressEvent，结果把 🔍 也一起拦死了：
+   * 捕获阶段先于目标元素执行，`preventDefault()` 取消了 <a href="zotero://...">
+   * 的默认导航，`stopPropagation()` 又让事件根本到不了 🔍 自身。
+   * 表现为"点击查看标识完全没反应"。
+   *
+   * 正确做法：捕获阶段只拦"我们自己不可交互的部分"(wrapper 空白/✕/➕)，
+   * 凡是来自 🔍 的事件一律放行，让浏览器执行 zotero:// 跳转；
+   * 同时🔍 自身 handler 里继续 stopPropagation，阻止冒泡到宿主页面的 <a>。
+   */
+  isOwnOpenLink(e) {
+    if (!e || !e.target || !e.target.closest) return false;
+    return e.target.closest('a.zotero-open-link') !== null;
+  }
+
+  /**
+   * 生成"跳到子分类"的链接元素（统一出口）。
+   */
+  createOpenLink(item) {
+    const openLink = document.createElement('a');
+    openLink.href = this.buildZoteroLink(item);
+    openLink.className = 'zotero-open-link';
+    openLink.style.cssText = 'margin-left: 2px; text-decoration: none; font-size: 12px;';
+    openLink.title = item.collection && item.collection.path
+      ? `在 Zotero 中打开（分类：${item.collection.path}）`
+      : 'Open in Zotero';
+    openLink.textContent = '🔍';
+    // 【关键】只 stopPropagation，**绝不能 preventDefault**：
+    // stopPropagation 阻止冒泡到宿主页面的 <a>（避免打开宿主网页），
+    // 但保留默认行为让浏览器执行 zotero:// 协议跳转。
+    openLink.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    return openLink;
+  }
+
   // 同步版本的创建选择器节点，避免异步问题
   async createPickerNodeSync(placeholder, identifier) {
     try {
@@ -433,10 +572,39 @@ class ZoteroPicker {
       const wrapper = document.createElement('span');
       wrapper.className = 'zotero-picker-wrapper';
       wrapper.style.cssText = 'margin-left: 2px; display: inline-flex; align-items: center; vertical-align: middle;';
+      // 【2026-10】记录该标记对应的标识符，供 forceRefresh() 定位并重查
+      wrapper.dataset.zpType = identifier.type;
+      wrapper.dataset.zpIdentifier = identifier.value;
+      // 标记插在页面文本里，落在宿主 <a>/<form> 内时必须整体接管，
+      // 否则任何一次点击都会触发宿主页面的跳转或表单提交。
+      //
+      // 【2026-10 修正·两处关键细节，务必保留】
+      // ① 捕获阶段必须放行来自 🔍 的事件：捕获先于目标执行，
+      //    若这里无条件 preventDefault，会把 zotero:// 协议跳转一起取消
+      //    （曾导致"点击查看标识完全没反应"）。
+      // ② 捕获阶段**只 preventDefault，绝不 stopPropagation**：
+      //    stopPropagation 会连同"继续向目标传播"一起终止，
+      //    事件根本到不了 ➕ 自己的 handler，导入功能会静默失效
+      //    （曾导致"点 ➕ 没反应"）。阻止冒泡由各元素自己的冒泡 handler 负责。
+      wrapper.addEventListener('click', (e) => {
+        if (this.isOwnOpenLink(e)) return;
+        e.preventDefault();
+      }, true);
+      wrapper.addEventListener('mousedown', (e) => {
+        if (this.isOwnOpenLink(e)) return;
+        // mousedown 的 preventDefault 可阻止文本选区/拖拽，顺带也阻止宿主行为
+        e.preventDefault();
+      }, true);
 
       // 创建状态标记
       const marker = document.createElement('span');
       this.updateMarkerStyle(marker, response);
+      // ✕ / ✓ 本身不可交互，但仍要 preventDefault，否则点在宿主 <a> 内会跳转。
+      // 同样不能用 stopPropagation —— 它会掐断后面 ➕/🔍 的事件。
+      marker.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();   // ✕ 是叶子节点，止于此处不会影响兄弟节点
+      }, true);
 
       wrapper.appendChild(marker);
 
@@ -444,27 +612,25 @@ class ZoteroPicker {
       if (this.serviceAvailable) {
         if (response.exists && response.items && response.items[0]) {
           const item = response.items[0]; // 获取当前文献对象
-          const openLink = document.createElement('a');
-          
-          // 【终极修改方案：动态拼接真实的 libraryID】
-          openLink.href = `zotero://select/items/${item.libraryID}_${item.itemKey}`;
-          
-          openLink.className = 'zotero-open-link';
-          openLink.style.cssText = 'margin-left: 2px; text-decoration: none; font-size: 12px;';
-          openLink.title = 'Open in Zotero';
-          openLink.textContent = '🔍';
-          wrapper.appendChild(openLink);
+          wrapper.appendChild(this.createOpenLink(item));
         } else {
           const addButton = document.createElement('button');
           addButton.className = 'zotero-add-button';
           addButton.style.cssText = 'margin-left: 2px; border: none; background: none; font-size: 12px; cursor: pointer; padding: 0;';
+          // 【关键】显式声明 type="button"。缺省时 HTML 规范默认 submit，
+          // 祖先若有 <form>，点击会提交表单 → 浏览器打开新页面。
+          addButton.setAttribute('type', 'button');
           addButton.textContent = '➕';
           addButton.title = 'Add to Zotero';
-          
-          const handleClick = this.debounce(async () => {
+
+          const handleClick = this.debounce(async (e) => {
+            // 只 preventDefault：阻断宿主 <form> 提交 / <a> 导航。
+            // 不调用 stopPropagation —— 这里已是事件目标附近，
+            // 无需再阻断传播，贸然阻断可能影响同节点的其他监听。
+            if (e) e.preventDefault();
             await this.importItem(identifier.type, identifier.value, addButton, wrapper, marker);
           }, this.debounceDelay);
-          
+
           addButton.addEventListener('click', handleClick);
           wrapper.appendChild(addButton);
         }
@@ -525,10 +691,22 @@ class ZoteroPicker {
 
   normalizeDOI(doi) {
     if (!doi) return '';
+    // 【2026-10】加强清洗：剥离尾部标点（正则边界改进后仍需兜底，
+    // 例如 "10.x/y." 句末点号、"10.x/y," 逗号、"10.x/y)" 括号）
     return doi.trim()
-      .replace(/\.$/, '')
-      .toLowerCase()
-      .replace(/\s+/g, '');
+      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+      .replace(/^doi:\s*/i, '')
+      .replace(/[\s.,;:!?)\]}'"]+$/, '')
+      .toLowerCase();
+  }
+
+  // 提取到的 DOI 是否为合法形态（10.xxxx/yyyy，前缀 4-9 位数字）
+  isValidDOI(doi) {
+    if (!doi) return false;
+    const d = this.normalizeDOI(doi);
+    if (!d) return false;
+    // 必须形如 10.NNNN/suffix
+    return /^10\.\d{4,9}\/\S+$/.test(d);
   }
 
   normalizeISBN(isbn) {
@@ -554,10 +732,17 @@ class ZoteroPicker {
 
   async checkServiceStatus() {
     try {
-      const response = await fetch('http://127.0.0.1:5000/check_identifier?type=doi&identifier=test', {
-        timeout: 2000
-      });
+      // 【2026-10】改用后端新增的 /health 端点。
+      // 原先用 ?type=doi&identifier=test 探测，该请求会进入 DOI 校验分支并返回 400，
+      // 语义不清且会做一次无意义的数据库查询。
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const response = await fetch('http://127.0.0.1:5000/health', { signal: controller.signal });
+      clearTimeout(timeoutId);
       this.serviceAvailable = response.ok;
+      if (!this.serviceAvailable) {
+        console.warn('Zotero Picker 后端返回异常状态');
+      }
     } catch (error) {
       this.serviceAvailable = false;
       console.warn('Flask service is not available:', error);
@@ -639,52 +824,52 @@ class ZoteroPicker {
       if (response && response.success) {
         const cacheKey = `${type}:${identifier}`;
         let newCheckResult = { exists: false };
-        let attempts = 0;
-        const maxAttempts = 5; // 最多轮询 10 次
+        let verifiedItem = null;
 
-        // 核心修复：轮询机制。每隔 500 毫秒查一次数据库，最多等 5 秒
-        while (attempts < maxAttempts) {
-          // 强制等待 500ms
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          // 每次检查前必须清除缓存，保证查到的是最新鲜的数据库
-          this.checkCache.delete(cacheKey);
-          newCheckResult = await this.checkZotero(type, identifier);
+        // 【2026-10 优化】后端在导入成功后已通过 Zotero HTTP API 实时校验并回传
+        // 真实 itemKey（sqlite 快照读不到刚写入的 WAL 数据，轮询必然失败）。
+        // 若拿到校验结果，直接使用，无需轮询。
+        if (response.verified && response.items && response.items.length > 0) {
+          verifiedItem = response.items[0];
+          this.checkCache.set(cacheKey, {
+            data: { exists: true, items: response.items },
+            timestamp: Date.now()
+          });
+        } else {
+          // 兜底：后端未确认时仍轮询查重接口
+          let attempts = 0;
+          const maxAttempts = 5;
 
-          // 如果查到了，立刻跳出循环！
-          if (newCheckResult.exists && newCheckResult.items && newCheckResult.items.length > 0) {
-            console.log(`成功从数据库抓取到新文献！耗时: ~${(attempts + 1) * 0.5}秒`);
-            break; 
+          while (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            this.checkCache.delete(cacheKey);
+            newCheckResult = await this.checkZotero(type, identifier);
+
+            if (newCheckResult.exists && newCheckResult.items && newCheckResult.items.length > 0) {
+              console.log(`成功从数据库抓取到新文献！耗时: ~${(attempts + 1) * 0.5}秒`);
+              break;
+            }
+            attempts++;
+            console.log(`等待 Zotero 写入数据库... 第 ${attempts} 次尝试`);
           }
-          
-          attempts++;
-          console.log(`等待 Zotero 写入数据库... 第 ${attempts} 次尝试`);
+          if (newCheckResult.exists && newCheckResult.items && newCheckResult.items.length > 0) {
+            verifiedItem = newCheckResult.items[0];
+          }
         }
 
-        if (newCheckResult.exists) {
-          // 查到了！更新 UI 为绿色对号，并添加跳转放大镜
-          this.updateMarkerStyle(marker, newCheckResult);
-          addButton.remove(); // 移除添加按钮
-          
-          if (newCheckResult.items && newCheckResult.items[0]) {
-            const item = newCheckResult.items[0];
-            const openLink = document.createElement('a');
-            
-            // 结合我们之前修复的精准跳转逻辑
-            openLink.href = `zotero://select/items/${item.libraryID}_${item.itemKey}`;
-            
-            openLink.className = 'zotero-open-link';
-            openLink.style.cssText = 'margin-left: 2px; text-decoration: none; font-size: 12px;';
-            openLink.title = 'Open in Zotero';
-            openLink.textContent = '🔍';
-            wrapper.appendChild(openLink);
-          }
+        if (verifiedItem) {
+          // 已确认入库：立即更新 UI 为绿色对号并移除添加按钮
+          this.updateMarkerStyle(marker, { exists: true });
+          addButton.remove();
+
+          const item = verifiedItem;
+          wrapper.appendChild(this.createOpenLink(item));
         } else {
-          // 如果等了 5 秒还没查到（可能是网太卡，Zotero下载太慢）
+          // 未确认（Zotero 可能仍在处理）：保持按钮可点，避免用户误以为失败而重复导入
           addButton.disabled = false;
           addButton.style.opacity = '1';
           addButton.textContent = originalText;
-          console.warn('导入指令已发送，但 Zotero 似乎处理得很慢，请稍后刷新查看。');
+          console.warn('导入指令已发送，但未确认入库状态，请稍后刷新查看。');
         }
       } else {
         // 导入指令发送失败
@@ -767,6 +952,46 @@ class ZoteroPicker {
       console.error(`Zotero检查失败(${type}):`, error);
       return { exists: false, error: error.message };
     }
+  }
+
+  /**
+   * 生成 Zotero 跳转链接（优先跳到条目所在子分类）。
+   *
+   * 【格式依据】Zotero 10 源码
+   *   C:\Program Files\Zotero\app\omni.ja
+   *   → chrome/content/zotero/ZoteroProtocolHandler.mjs 的 SelectExtension
+   * 支持的路由：
+   *   {library|groups/:groupID}/collections/{colKey}/items/{itemKey}  ← 先选中分类再选中条目
+   *   {library|groups/:groupID}/items/{itemKey}                    ← 只选中条目
+   *   items/{libraryID}_{itemKey}                                  ← 官方已标注 Deprecated
+   *
+   * 处理时若能定位分类，会先 selectCollection() 再 selectItems()，
+   * Zotero 直接展开到那个分类并高亮条目，比只跳到文库根节点省一步。
+   *
+   * 个人文库用 library/ 前缀；群组库用 groups/{groupID}/ 前缀。
+   * ⚠ groupID 来自后端 groups 表（groups.groupID），不是 libraries.libraryID
+   *（本库分别是 6212837 和 8）。官方 SelectExtension 内部会做
+   *getLibraryIDFromGroupID() 转换，若传libraryID 会定位不到库。
+   */
+  buildZoteroLink(item) {
+    if (!item || !item.itemKey) return '';
+    const col = item.collection;
+    const isGroup = item.libraryType === 'group' || item.groupID != null;
+
+    // 群组库：groups/{groupID}/...
+    if (isGroup && item.groupID) {
+      const gid = item.groupID;
+      if (col && col.key) {
+        return `zotero://select/groups/${gid}/collections/${col.key}/items/${item.itemKey}`;
+      }
+      return `zotero://select/groups/${gid}/items/${item.itemKey}`;
+    }
+
+    // 个人文库
+    if (col && col.key) {
+      return `zotero://select/library/collections/${col.key}/items/${item.itemKey}`;
+    }
+    return `zotero://select/library/items/${item.itemKey}`;
   }
 
   debounce(func, wait) {
